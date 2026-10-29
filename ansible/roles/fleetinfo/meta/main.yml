@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  author: Equipe Plateforme NovaRetail
+  description: Deploiement versionne de Fleet Info avec rollback automatique
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - "12"
+dependencies: []

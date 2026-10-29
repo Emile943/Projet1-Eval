@@ -1,0 +1,5 @@
+---
+fleetinfo_base_dir: "/opt/fleetinfo"
+fleetinfo_releases_dir: "{{ fleetinfo_base_dir }}/releases"
+fleetinfo_current_link: "{{ fleetinfo_base_dir }}/current"
+fleetinfo_log_file: "/var/log/fleetinfo/deploy.log"

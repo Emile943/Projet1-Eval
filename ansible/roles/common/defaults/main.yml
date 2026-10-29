@@ -1,0 +1,6 @@
+---
+common_timezone: "UTC"
+common_packages:
+  - curl
+  - htop
+  - apache2-utils
