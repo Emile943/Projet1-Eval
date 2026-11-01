@@ -32,6 +32,20 @@
         group: www-data
         mode: "0755"
 
+    - name: Enregistrer la date de deploiement de cette release (une seule fois)
+      ansible.builtin.copy:
+        content: "{{ ansible_facts['date_time']['iso8601'] }}\n"
+        dest: "{{ fleetinfo_releases_dir }}/{{ fleetinfo_version }}/deployed_at"
+        owner: www-data
+        group: www-data
+        mode: "0644"
+        force: false  # ne réécrit pas le fichier si la release existe déjà : second passage idempotent
+
+    - name: Lire la date de deploiement de cette release
+      ansible.builtin.slurp:
+        src: "{{ fleetinfo_releases_dir }}/{{ fleetinfo_version }}/deployed_at"
+      register: fleetinfo_deployed_at
+
     - name: Generation de la page index.html
       ansible.builtin.template:
         src: index.html.j2
@@ -98,3 +112,5 @@
         create: true
         mode: "0644"
         line: "{{ ansible_date_time.iso8601 }} - Version: {{ fleetinfo_version }} - Statut: {{ deploy_status }}"
+      # Un journal ajoute une ligne à chaque tentative : ce n'est pas un changement d'état du serveur
+      changed_when: false

@@ -14,7 +14,7 @@
         <li><strong>vCPU :</strong> {{ ansible_processor_vcpus }}</li>
         <li><strong>RAM Totale :</strong> {{ ansible_memtotal_mb }} MB</li>
         <li><strong>Version Application :</strong> {{ fleetinfo_version }}</li>
-        <li><strong>Dernier deploiement :</strong> {{ ansible_date_time.iso8601 }}</li>
+        <li><strong>Dernier deploiement :</strong> {{ fleetinfo_deployed_at.content | b64decode | trim }}</li>
         {% if ansible_facts['gce'] is defined %}
         <li><strong>Zone GCP :</strong> {{ ansible_facts['gce']['zone'] }}</li>
         <li><strong>Machine Type GCP :</strong> {{ ansible_facts['gce']['machine_type'] }}</li>
