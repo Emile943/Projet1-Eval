@@ -1,0 +1,6 @@
+---
+# Version a deployer
+fleetinfo_version: "1.0.0"
+
+# Passer a true pour tester le rollback automatique pendant la soutenance
+fleetinfo_simulate_failure: false

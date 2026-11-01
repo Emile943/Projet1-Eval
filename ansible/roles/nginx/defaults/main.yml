@@ -1,0 +1,4 @@
+---
+#Variables pour le serveur Nginx
+nginx_listen_port: 80
+nginx_status_user: "admin"

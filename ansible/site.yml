@@ -1,0 +1,8 @@
+---
+- name: Deploiement du socle web et de l'application Fleet Info
+  hosts: web
+  become: true
+  roles:
+    - role: common
+    - role: nginx
+    - role: fleetinfo

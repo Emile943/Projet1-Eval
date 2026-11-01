@@ -1,0 +1,23 @@
+---
+- name: Mise a jour du cache apt et installation des paquets indispensables
+  ansible.builtin.apt:
+    name: "{{ common_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Configuration du fuseau horaire du serveur
+  community.general.timezone:
+    name: "{{ common_timezone }}"
+
+- name: Configuration de la banniere de connexion (/etc/motd)
+  ansible.builtin.copy:
+    content: |
+      ==================================================
+      ATTENTION : Serveur configure automatiquement
+      Toute modification manuelle sera ecrasee.
+      ==================================================
+    dest: /etc/motd
+    owner: root
+    group: root
+    mode: "0644"
