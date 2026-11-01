@@ -24,9 +24,11 @@ resource "google_compute_instance" "vm" {
     access_config {}
   }
 
-  # La clé PUBLIQUE est copiée dans la VM. La clé privée reste sur le PC local.
+  # La clé PUBLIQUE est copiée dans la VM. La clé privée reste sur ton PC.
+  # enable-oslogin = FALSE : sans cela, un projet qui impose OS Login ignorerait ces clés.
   metadata = {
-    ssh-keys = "${var.ssh_user}:${var.ssh_public_key}"
+    ssh-keys       = "${var.ssh_user}:${var.ssh_public_key}"
+    enable-oslogin = "FALSE"
   }
 }
 
