@@ -19,6 +19,9 @@
   ansible.builtin.set_fact:
     previous_target: "{{ current_link_stat.stat.lnk_target | default('') }}"
 
+- name: Appliquer les handlers en attente (rechargement nginx)
+  ansible.builtin.meta: flush_handlers
+
 - name: Bloc de deploiement avec controle et retour arriere
   block:
     - name: Creation du dossier de la release demandee
