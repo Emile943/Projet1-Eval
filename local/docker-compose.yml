@@ -32,6 +32,8 @@ services:
   controller:
     build: ./controller
     hostname: controller
+    environment:
+      ANSIBLE_CONFIG: /workspace/ansible/ansible.cfg
     depends_on:
       - node1
       - node2
