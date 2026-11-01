@@ -1,0 +1,27 @@
+#inventaire DYNAMIQUE. Le plugin interroge l'API GCP et construit
+#l'inventaire à partir des VM qui existent. Aucune IP n'est écrite ici.
+#Le nom du fichier doit se terminer par .gcp.yml pour être reconnu par le plugin.
+plugin: google.cloud.gcp_compute
+
+# Le projet change à chaque lab : on le lit dans une variable d'environnement.
+projects:
+  - "{{ lookup('env', 'GCP_PROJECT') }}"
+
+# Authentification : identifiants créés par "gcloud auth application-default login".
+auth_kind: application
+
+# On ne garde que les VM démarrées.
+filters:
+  - status = RUNNING
+
+# Le nom de l'hôte dans Ansible est le nom de la VM (fleet-web-1, fleet-web-2).
+hostnames:
+  - name
+
+# L'adresse de connexion est l'IP publique de la VM.
+compose:
+  ansible_host: networkInterfaces[0].accessConfigs[0].natIP
+
+# Groupe "web" : toutes les VM dont le label role vaut "web" (posé par Terraform).
+groups:
+  web: "labels.role == 'web'"
