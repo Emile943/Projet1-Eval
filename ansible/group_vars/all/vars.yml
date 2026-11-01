@@ -1,0 +1,3 @@
+---
+#Variable lisible en clair qui pointe vers le secret chiffré
+nginx_status_password: "{{ vault_nginx_status_password }}"

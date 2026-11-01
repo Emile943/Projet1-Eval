@@ -1,0 +1,43 @@
+---
+- name: Installation du serveur web nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+
+- name: Creation du fichier .htpasswd pour /status
+  community.general.htpasswd:
+    path: /etc/nginx/.htpasswd
+    name: "{{ nginx_status_user }}"
+    password: "{{ nginx_status_password }}"
+    mode: "0640"
+    owner: www-data
+    group: www-data
+  no_log: true
+
+- name: Deploiement de la configuration du site
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/sites-available/fleetinfo.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Activation du site fleetinfo
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/fleetinfo.conf
+    dest: /etc/nginx/sites-enabled/fleetinfo.conf
+    state: link
+  notify: Reload nginx
+
+- name: Suppression du site par defaut de nginx
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Demarrage du service nginx
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true

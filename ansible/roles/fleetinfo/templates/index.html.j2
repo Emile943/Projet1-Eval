@@ -1,0 +1,24 @@
+<!-- {{ ansible_managed }} -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Fleet Info - {{ ansible_hostname }}</title>
+</head>
+<body>
+    <h1>Informations Serveur : {{ ansible_hostname }}</h1>
+    <ul>
+        <li><strong>Adresse IP :</strong> {{ ansible_default_ipv4.address | default('N/A') }}</li>
+        <li><strong>OS :</strong> {{ ansible_distribution }} {{ ansible_distribution_version }}</li>
+        <li><strong>Noyau :</strong> {{ ansible_kernel }}</li>
+        <li><strong>vCPU :</strong> {{ ansible_processor_vcpus }}</li>
+        <li><strong>RAM Totale :</strong> {{ ansible_memtotal_mb }} MB</li>
+        <li><strong>Version Application :</strong> {{ fleetinfo_version }}</li>
+        <li><strong>Dernier deploiement :</strong> {{ ansible_date_time.iso8601 }}</li>
+        {% if ansible_facts['gce'] is defined %}
+        <li><strong>Zone GCP :</strong> {{ ansible_facts['gce']['zone'] }}</li>
+        <li><strong>Machine Type GCP :</strong> {{ ansible_facts['gce']['machine_type'] }}</li>
+        {% endif %}
+    </ul>
+</body>
+</html>

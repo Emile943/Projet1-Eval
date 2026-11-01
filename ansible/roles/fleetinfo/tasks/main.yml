@@ -1,0 +1,97 @@
+---
+- name: Creation des dossiers de base
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  loop:
+    - "{{ fleetinfo_releases_dir }}"
+    - "/var/log/fleetinfo"
+
+- name: Verification de la version actuellement en place
+  ansible.builtin.stat:
+    path: "{{ fleetinfo_current_link }}"
+  register: current_link_stat
+
+- name: Sauvegarde de l'ancienne version pour rollback
+  ansible.builtin.set_fact:
+    previous_target: "{{ current_link_stat.stat.lnk_target | default(omit) }}"
+
+- name: Bloc de deploiement avec controle et retour arriere
+  block:
+    - name: Creation du dossier de la release demandee
+      ansible.builtin.file:
+        path: "{{ fleetinfo_releases_dir }}/{{ fleetinfo_version }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+
+    - name: Generation de la page index.html
+      ansible.builtin.template:
+        src: index.html.j2
+        dest: "{{ fleetinfo_releases_dir }}/{{ fleetinfo_version }}/index.html"
+        owner: www-data
+        group: www-data
+        mode: "0644"
+
+    - name: Generation du endpoint health.json
+      ansible.builtin.template:
+        src: health.j2
+        dest: "{{ fleetinfo_releases_dir }}/{{ fleetinfo_version }}/health.json"
+        owner: www-data
+        group: www-data
+        mode: "0644"
+
+    - name: Bascule du lien symbolique current vers la nouvelle version
+      ansible.builtin.file:
+        src: "{{ fleetinfo_releases_dir }}/{{ fleetinfo_version }}"
+        dest: "{{ fleetinfo_current_link }}"
+        state: link
+        owner: www-data
+        group: www-data
+
+    - name: Simulation d'echec volontaire pour demonstration
+      ansible.builtin.fail:
+        msg: "Echec simule du deploiement"
+      when: fleetinfo_simulate_failure | bool
+
+    - name: Verification du point de sante /health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ nginx_listen_port }}/health"
+        return_content: true
+        status_code: 200
+      register: health_check
+      failed_when: >
+        health_check.status != 200 or
+        (health_check.json.version | default('')) != fleetinfo_version
+
+    - name: Noter le succes du deploiement
+      ansible.builtin.set_fact:
+        deploy_status: "SUCCESS"
+
+  rescue:
+    - name: Noter l'echec du deploiement
+      ansible.builtin.set_fact:
+        deploy_status: "FAILED"
+
+    - name: Restauration de l'ancienne version (Rollback)
+      ansible.builtin.file:
+        src: "{{ previous_target }}"
+        dest: "{{ fleetinfo_current_link }}"
+        state: link
+      when: previous_target is defined
+
+    - name: Arret du playbook avec explication
+      ansible.builtin.fail:
+        msg: "Le deploiement a echoue. L'ancienne version a ete restauree."
+
+  always:
+    - name: Inscription de la trace dans le journal deploy.log
+      ansible.builtin.lineinfile:
+        path: "{{ fleetinfo_log_file }}"
+        create: true
+        mode: "0644"
+        line: "{{ ansible_date_time.iso8601 }} - Version: {{ fleetinfo_version }} - Statut: {{ deploy_status }}"
