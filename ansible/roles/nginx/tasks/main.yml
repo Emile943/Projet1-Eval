@@ -4,6 +4,11 @@
     name: nginx
     state: present
 
+- name: Installation de passlib (requis par le module htpasswd)
+  ansible.builtin.apt:
+    name: python3-passlib
+    state: present
+
 - name: Creation du fichier .htpasswd pour /status
   community.general.htpasswd:
     path: /etc/nginx/.htpasswd

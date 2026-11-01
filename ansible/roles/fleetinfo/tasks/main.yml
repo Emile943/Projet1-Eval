@@ -17,7 +17,7 @@
 
 - name: Sauvegarde de l'ancienne version pour rollback
   ansible.builtin.set_fact:
-    previous_target: "{{ current_link_stat.stat.lnk_target | default(omit) }}"
+    previous_target: "{{ current_link_stat.stat.lnk_target | default('') }}"
 
 - name: Bloc de deploiement avec controle et retour arriere
   block:
@@ -82,7 +82,7 @@
         src: "{{ previous_target }}"
         dest: "{{ fleetinfo_current_link }}"
         state: link
-      when: previous_target is defined
+      when: previous_target | length > 0
 
     - name: Arret du playbook avec explication
       ansible.builtin.fail:

@@ -10,7 +10,7 @@ Ce rôle installe le socle de base sur les serveurs Debian 12.
 ## Variables par défaut (`defaults/main.yml`)
 | Variable | Valeur par défaut | Description |
 |---|---|---|
-| `common_timezone` | `"UTC"` | Fuseau horaire configuré sur la machine |
+| `common_timezone` | `"Etc/UTC"` | Fuseau horaire configuré sur la machine |
 | `common_packages` | `[curl, htop, apache2-utils]` | Liste des paquets de base à installer |
 
 ## Dépendances
