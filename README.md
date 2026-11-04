@@ -15,7 +15,6 @@ Ce dépôt déploie, en quelques commandes, l'infrastructure et l'application **
 6. [Référence des variables](#6-référence-des-variables)
 7. [Décisions techniques](#7-décisions-techniques)
 8. [Où regarder en cas de problème](#8-où-regarder-en-cas-de-problème)
-9. [Limites connues et dette technique](#9-limites-connues-et-dette-technique)
 
 ## 1. Présentation
 
@@ -308,7 +307,3 @@ Les rôles Ansible publics éventuels et leur justification sont à ajouter par 
 | Déploiement : `/health` répond 404, retour arrière déclenché sur des VM neuves | nginx n'avait pas rechargé sa configuration avant le contrôle (le handler s'exécute en fin de play) | Tâche `meta: flush_handlers` au début du rôle `fleetinfo` (déjà en place) |
 | Second passage : `changed=2` | Journal `deploy.log` et date de déploiement recalculés à chaque passage | `changed_when: false` sur le journal ; date de déploiement figée par release (fichier `deployed_at`) |
 | Git : `refusing to merge unrelated histories` | Branches sans ancêtre commun | Recréer la branche à partir de `main`, ou `--allow-unrelated-histories` sur une branche de test |
-
-## 9. Limites connues et dette technique
-
-Le socle fonctionne en local de bout en bout et sur GCP : infrastructure, inventaire dynamique et déploiement de l'application sur deux VM neuves ont été validés sur un lab réel, avec un second passage à `changed=0`.
