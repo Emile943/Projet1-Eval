@@ -313,18 +313,3 @@ Les rôles Ansible publics éventuels et leur justification sont à ajouter par 
 ## 9. Limites connues et dette technique
 
 Le socle fonctionne en local de bout en bout et sur GCP : infrastructure, inventaire dynamique et déploiement de l'application sur deux VM neuves ont été validés sur un lab réel, avec un second passage à `changed=0`.
-
-**À terminer avant la soutenance**
-
-- `terraform fmt -check`, `terraform validate` et `ansible-lint` ne tournent pas encore dans un contrôle automatique.
-- Les corrections des rôles Ansible (rechargement de nginx avant le contrôle `/health`, journal `deploy.log` en `changed_when: false`, date de déploiement figée par release) sont sur la branche `integration`, pas encore reprises sur la branche `ansible`, dont l'historique est sans lien avec `main`.
-
-**Hors production**
-
-- State Terraform local, sans verrouillage ni sauvegarde.
-- Nœuds Docker en `privileged` et `StrictModes no` : acceptable en développement local uniquement.
-- HTTP sans TLS ; `/status` protégé par mot de passe basique.
-- SSH ouvert à une seule IP : si elle change, il faut mettre à jour `ssh_source_ranges` et relancer `terraform apply`.
-- Variable `ansible_date_time` dépréciée, à remplacer par `ansible_facts['date_time']`.
-
-**Suites envisagées :** backend distant GCS pour le state, TLS sur nginx, contrôles automatiques (`terraform validate`, `ansible-lint`) à chaque Pull Request.
