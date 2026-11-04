@@ -1,10 +1,9 @@
 # Socle Web Automatisé : Terraform + Ansible sur Google Cloud
 
-Dernière mise à jour : 4 novembre 2026
 
-Ce dépôt déploie, en quelques commandes, l'infrastructure et l'application **Fleet Info** (une page web d'information sur le serveur qui la sert), sur Google Cloud et en local, de façon reproductible et idempotente.
+Ce dépôt déploie, en quelques commandes, l'infrastructure et l'application **Fleet Info**, sur Google Cloud et en local, de façon reproductible et idempotente.
 
-**Terraform crée l'infrastructure, Ansible la configure et y déploie l'application** : les deux outils ne se recouvrent jamais.
+**Terraform crée l'infrastructure, Ansible la configure et y déploie l'application**
 
 ## Sommaire
 
@@ -70,7 +69,7 @@ Terraform construit le réseau et les VM sur GCP, Docker Compose reproduit des V
 | `main.tf` | Assemble les modules réseau puis VM |
 | `outputs.tf` | Affiche IP, noms des VM, du VPC et du sous-réseau |
 | `terraform.tfvars.example` | Modèle des valeurs à remplir |
-| `terraform.tfvars` | Valeurs réelles du lab (non versionné) |
+| `terraform.tfvars` | Valeurs réelles du lab |
 | `modules/network/` | VPC, sous-réseau, pare-feu HTTP et SSH |
 | `modules/compute/` | VM Debian 12 avec labels, tag réseau et clé SSH |
 
