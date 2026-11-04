@@ -1,346 +1,330 @@
-# Projet d'équipe — « Socle Web Automatisé » : Terraform + Ansible sur Google Cloud
+# Socle Web Automatisé : Terraform + Ansible sur Google Cloud
 
-**Équipe :** 5 étudiantes / étudiants
-**Prérequis :** modules Cloud (fondamentaux GCP), Terraform (fondamentaux + atelier), Ansible (labs playbooks, variables, rôles, templates, handlers, blocks, atelier post-Terraform)
-**Outils :** Git, VS Code, Terraform, Ansible, Docker Desktop + Docker Compose, gcloud, Google Cloud (Compute Engine)
-**Livrables :** un dépôt Git + une documentation de transfert de connaissance (README et/ou slides) + une soutenance avec démonstration
+Dernière mise à jour : 4 novembre 2026
 
----
+Ce dépôt déploie, en quelques commandes, l'infrastructure et l'application **Fleet Info** (une page web d'information sur le serveur qui la sert), sur Google Cloud et en local, de façon reproductible et idempotente.
 
-## 1. Contexte
+**Terraform crée l'infrastructure, Ansible la configure et y déploie l'application** : les deux outils ne se recouvrent jamais.
 
-**NovaRetail** (entreprise fictive) est une enseigne de distribution d'environ 2 000 salariés. Son
-équipe d'exploitation gère aujourd'hui une dizaine de serveurs web internes (portails, pages
-d'information, outils de supervision) **à la main** : chaque serveur a été installé différemment,
-personne ne sait exactement ce qui tourne où, et chaque mise à jour applicative est une opération
-risquée faite en SSH, sans retour arrière possible.
+## Sommaire
 
-Suite à un incident (une mise en production ratée a rendu un portail indisponible pendant une
-demi-journée), la DSI lance le projet **« Socle Web Automatisé »**, dont votre équipe — l'**équipe
-Plateforme** — est chargée. Les attentes de la DSI sont les suivantes :
+1. [Présentation](#1-présentation)
+2. [Architecture et structure du dépôt](#2-architecture-et-structure-du-dépôt)
+3. [Prérequis et accès](#3-prérequis-et-accès)
+4. [Déploiement de zéro](#4-déploiement-de-zéro)
+5. [Runbooks d'exploitation](#5-runbooks-dexploitation)
+6. [Référence des variables](#6-référence-des-variables)
+7. [Décisions techniques](#7-décisions-techniques)
+8. [Où regarder en cas de problème](#8-où-regarder-en-cas-de-problème)
+9. [Limites connues et dette technique](#9-limites-connues-et-dette-technique)
 
-- toute l'infrastructure est décrite **en code** et peut être reconstruite à l'identique, à tout
-  moment, sans action manuelle ;
-- la configuration des serveurs et le déploiement applicatif sont **automatisés, reproductibles
-  et idempotents** : relancer l'automatisation sur un serveur déjà conforme ne change rien ;
-- une mise en production qui échoue **revient automatiquement à la version précédente** ;
-- les développeurs doivent pouvoir travailler **en local** sur leur poste, avec le même code
-  d'automatisation que celui utilisé sur le cloud ;
-- aucun secret ne doit apparaître en clair dans le dépôt.
+## 1. Présentation
 
-À la fin du projet, le socle sera **repris en exploitation (run) par une société de conseil
-externe**. C'est le rôle que joue l'examinateur : un consultant qui découvre votre travail et
-doit être capable, **avec votre seule documentation**, de le redéployer, de l'exploiter et de le
-faire évoluer. Votre documentation est donc un livrable à part entière, au même titre que le code.
+| | Automatisé | Non automatisé |
+| --- | --- | --- |
+| Cloud | VPC, sous-réseau, pare-feu, 2 VM Debian 12 (Terraform) ; nginx et Fleet Info (Ansible) | Création du projet GCP (lab), `gcloud auth`, choix de la zone |
+| Local | 2 nœuds Debian + contrôleur Ansible (Docker Compose) | Génération de la clé SSH locale (faite par `scripts/local.sh`) |
+| Application | Releases versionnées, bascule par lien symbolique, retour arrière automatique | Choix du numéro de version à déployer |
+| Secrets | Chiffrement avec Ansible Vault | Transmission du mot de passe Vault entre membres |
 
-## 2. Ce que vous devez construire
+## 2. Architecture et structure du dépôt
 
-### 2.1 Vue d'ensemble
+Terraform construit le réseau et les VM sur GCP, Docker Compose reproduit des VM en local, et un même `site.yml` Ansible configure les deux : seuls l'inventaire et les `group_vars` changent.
 
 ```
-                        ┌──────────────────────────────────────────────┐
-                        │            Dépôt Git de l'équipe             │
-                        │  terraform/   ansible/   local/   docs/      │
-                        └───────────────┬──────────────────┬───────────┘
-                                        │                  │
-              ENVIRONNEMENT CLOUD       │                  │      ENVIRONNEMENT LOCAL
-   ┌────────────────────────────────────▼───┐   ┌──────────▼─────────────────────────────┐
-   │ Terraform  ──▶  VPC + sous-réseau      │   │ docker compose up                      │
-   │                 règles firewall         │   │   ├── controller (Ansible)             │
-   │                 N VM Compute Engine     │   │   ├── node1 (Debian, systemd, sshd)    │
-   │                 (labels / tags réseau)  │   │   └── node2 (Debian, systemd, sshd)    │
-   │                                         │   │                                        │
-   │ Ansible ── inventaire dynamique ────────│   │ Ansible ── inventaire statique         │
-   │            google.cloud.gcp_compute     │   │            (mêmes noms de groupes)     │
-   └────────────────────┬────────────────────┘   └──────────────────┬─────────────────────┘
-                        │                                           │
-                        └────────────── MÊMES playbooks ────────────┘
-                                         MÊMES rôles
-                                         MÊMES templates
-                              seuls l'inventaire et les group_vars
-                                   d'environnement diffèrent
+                     Dépôt Git : terraform/  ansible/  local/  scripts/
+                          |                        |
+        ENVIRONNEMENT CLOUD                        |        ENVIRONNEMENT LOCAL
+  +-----------------------------------+            |   +-----------------------------------+
+  | Terraform -> VPC + sous-réseau    |            |   | docker compose up                 |
+  |              pare-feu (tag réseau)|            |   |   controller (Ansible)            |
+  |              2 VM Debian 12       |            |   |   node1, node2 (Debian, systemd)  |
+  |              (labels + tag)       |            |   |                                   |
+  | Ansible -> inventaire dynamique   |            |   | Ansible -> inventaire statique    |
+  |            google.cloud.gcp_compute            |   |            (groupe web)           |
+  +----------------+------------------+            |   +----------------+------------------+
+                   |                               |                    |
+                   +------------ MÊME site.yml, MÊMES rôles, MÊMES templates ------------+
 ```
 
-Principe directeur : **Terraform crée l'infrastructure, Ansible la configure et y déploie
-l'application.** Les deux outils ne se recouvrent jamais (Ansible ne crée pas de VM, Terraform
-n'installe pas de paquet). Le code Ansible est **strictement le même** en local et sur le cloud.
+### Ressources Terraform
 
-### 2.2 L'application « Fleet Info »
+| Module | Ressource | Rôle |
+| --- | --- | --- |
+| `modules/network` | `google_compute_network.vpc` | VPC dédié en mode custom |
+| `modules/network` | `google_compute_subnetwork.subnet` | Sous-réseau des VM |
+| `modules/network` | `google_compute_firewall.allow_http` | TCP 80 depuis Internet, vers les VM portant le tag réseau |
+| `modules/network` | `google_compute_firewall.allow_ssh` | TCP 22 depuis `ssh_source_ranges` seulement, vers les mêmes VM |
+| `modules/compute` | `google_compute_instance.vm` (x `vm_count`) | VM Debian 12 avec labels `env`, `role`, `team`, tag réseau et clé SSH publique |
 
-L'application à déployer est une page web d'information sur le serveur qui la sert. Elle permet à
-l'équipe d'exploitation de vérifier d'un coup d'œil sur quelle machine elle se trouve et dans
-quel état est cette machine.
+**Frontière Terraform / Ansible.** Terraform ne touche jamais au contenu des machines et Ansible ne crée aucune VM. Le lien entre les deux est la paire labels + tag réseau, que l'inventaire dynamique lit pour classer les VM dans le groupe `web`.
 
-**Exigences fonctionnelles :**
+### Structure du dépôt
 
-| Élément | Attendu |
-|---|---|
-| Page d'accueil `/` | Affiche au minimum : nom de la machine (hostname / FQDN), adresse(s) IP, distribution et version de l'OS, version du noyau, nombre de vCPU, mémoire totale, environnement (`local` / `cloud`), **version de l'application** déployée, date et heure du dernier déploiement. |
-| Informations cloud | Sur GCP, afficher en plus la zone et le type de machine. En local, ces champs sont absents : la page doit s'adapter proprement (pas de champ vide ni d'erreur de template). |
-| Endpoint `/health` | Renvoie un statut et la version déployée (texte ou JSON). Il sert de **contrôle de santé** après chaque déploiement. |
-| Endpoint `/status` | Page technique du serveur web (par exemple `stub_status` de nginx), **protégée par une authentification** dont le mot de passe est un secret géré avec Ansible Vault. |
-| Serveur web | nginx (recommandé). |
+**Infrastructure cloud, dossier `terraform/`**
 
-Le contenu de la page est **généré par Ansible** à partir des *facts* collectés sur chaque
-machine et des variables du projet. Deux serveurs doivent donc afficher deux pages différentes,
-sans que vous ayez écrit une page par serveur.
+| Fichier | Rôle |
+| --- | --- |
+| `versions.tf` | Versions de Terraform et du fournisseur Google |
+| `variables.tf` | Réglages : projet, région, zone, nombre de VM, type de machine |
+| `main.tf` | Assemble les modules réseau puis VM |
+| `outputs.tf` | Affiche IP, noms des VM, du VPC et du sous-réseau |
+| `terraform.tfvars.example` | Modèle des valeurs à remplir |
+| `terraform.tfvars` | Valeurs réelles du lab (non versionné) |
+| `modules/network/` | VPC, sous-réseau, pare-feu HTTP et SSH |
+| `modules/compute/` | VM Debian 12 avec labels, tag réseau et clé SSH |
 
-**Gestion des versions applicatives :** l'application est livrée sous forme de *releases*
-versionnées (par exemple `1.0.0`, `1.1.0`). Une variable définit la version à déployer. Chaque
-release est déployée dans son propre répertoire sur le serveur (par exemple
-`/opt/fleetinfo/releases/<version>/`) et la version active est désignée par un lien symbolique
-(par exemple `/opt/fleetinfo/current`). Ce découpage est ce qui rend le retour arrière possible.
+**Environnement local, dossier `local/`**
 
-### 2.3 L'infrastructure cloud (Terraform)
+| Fichier | Rôle |
+| --- | --- |
+| `docker-compose.yml` | Démarre les 2 nœuds et le contrôleur Ansible |
+| `node/Dockerfile` | Nœud : Debian 12 avec systemd, SSH, Python, sudo |
+| `controller/Dockerfile` | Contrôleur avec Ansible et ses collections |
+| `controller/entrypoint.sh` | Installe la clé SSH dans le contrôleur au démarrage |
+| `ssh/` | Clés SSH locales générées (non versionné) |
 
-| Ressource | Exigence |
-|---|---|
-| Réseau | Un VPC dédié (pas le réseau `default`) et au moins un sous-réseau. |
-| Firewall | HTTP (80) ouvert ; SSH (22) ouvert **uniquement** aux plages nécessaires (justifiez votre choix). Les règles ciblent les VM par **tag réseau**, pas « toutes les instances ». |
-| VM | Au moins **2 VM** Compute Engine Debian 12, en nombre paramétrable par une variable (passer de 2 à 3 VM ne doit demander qu'un changement de variable). |
-| Identification | Chaque VM porte des **labels** (au minimum `env`, `role`, `team`) et un **tag réseau** commun. Ce sont eux qu'utilise l'inventaire dynamique Ansible. |
-| Accès SSH | Clé publique injectée via les métadonnées de la VM (ou OS Login, à justifier). Aucune clé privée dans le dépôt. |
-| Paramétrage | `project_id`, région, zone, type de machine, nombre de VM… en **variables** ; aucune valeur propre à une session de lab écrite en dur dans le code. |
-| Sorties | Des `outputs` utiles à l'exploitation (IP publiques, noms des VM, URL de la page d'accueil…). |
-| Qualité | Versions de Terraform et du provider épinglées, `terraform fmt` et `terraform validate` sans erreur. |
+**Connexion d'Ansible aux machines, dossier `ansible/inventories/`**
 
-**Idempotence Terraform :** juste après un `terraform apply`, un `terraform plan` doit afficher
-`No changes`.
+| Fichier | Rôle |
+| --- | --- |
+| `local/hosts.yml` | Liste fixe des nœuds locaux, groupe `web` |
+| `local/group_vars/all.yml` | Utilisateur et clé SSH en local |
+| `cloud/fleet.gcp.yml` | Retrouve les VM de Google par leurs labels |
+| `cloud/group_vars/all.yml` | Utilisateur et clé SSH en cloud |
+| `cloud/run.gcp.yml` | Copie du précédent avec le vrai projet (non versionné, générée) |
 
-**Gestion du state :** le projet GCP du lab est éphémère, un state local est donc acceptable.
-Vous devez en revanche **documenter ce choix** et ce qu'il faudrait faire en entreprise.
+**Configuration des serveurs et application, dossier `ansible/`**
 
-### 2.4 L'environnement local (Docker Desktop + Docker Compose)
+| Fichier | Rôle |
+| --- | --- |
+| `site.yml` | Point d'entrée, appelle les trois rôles |
+| `ansible.cfg` | Réglages d'Ansible |
+| `roles/common/` | Socle commun : paquets, fuseau horaire |
+| `roles/nginx/` | Serveur web et page `/status` protégée |
+| `roles/fleetinfo/` | Application versionnée, contrôle `/health`, retour arrière, journal |
+| `group_vars/all/vars.yml`, `vault.yml` | Variables et secrets chiffrés |
 
-L'environnement local reproduit le cloud avec des conteneurs qui **se comportent comme des VM** :
+**Scripts, dossier `scripts/`**
 
-- au moins **2 conteneurs « nœuds »** Debian 12 avec `systemd`, `sshd`, `python3` et `sudo`,
-  pour qu'Ansible les gère exactement comme des VM (connexion SSH, modules `service`/`systemd`,
-  handlers…) ;
-- un **conteneur « controller »** qui contient Ansible (et ses collections) et depuis lequel on
-  lance les playbooks. Ansible ne s'exécutant pas nativement sous Windows, c'est ce conteneur qui
-  sert de poste de contrôle sur les postes Windows (WSL est une alternative acceptée) ;
-- les ports HTTP des nœuds sont publiés sur l'hôte (par exemple `8081`, `8082`) pour consulter les
-  pages depuis un navigateur ;
-- un **inventaire statique** qui utilise **les mêmes noms de groupes** que l'inventaire dynamique
-  GCP, pour que `site.yml` fonctionne sans modification dans les deux environnements.
+| Fichier | Rôle |
+| --- | --- |
+| `local.sh` | `start`, `up`, `deploy`, `check`, `down` pour le local |
+| `cloud.sh` | `setup`, `up`, `deploy`, `down` pour le cloud |
 
-Vous pouvez reprendre les images de conteneurs utilisées dans les labs et les fichiers Docker Compose
-pour instancier cet environnement local.
-**Les ressources utilisées devront pouvoir être décrites et leur fonctionnement expliqué**.
+## 3. Prérequis et accès
 
-Les clés SSH utilisées entre le controller et les nœuds sont générées au démarrage ou par un
-script, **jamais committées**.
+| Outil | Version testée | Rôle |
+| --- | --- | --- |
+| Terraform | 1.16.6 (minimum 1.5) | Crée l'infrastructure GCP |
+| Google Cloud SDK (`gcloud`) | | Authentification de Terraform et de l'inventaire dynamique |
+| Docker Desktop + Compose | 29.8.0 | Environnement local et poste de contrôle Ansible |
+| Git, VS Code | | Dépôt et édition |
 
-### 2.5 L'environnement cloud (lab Google Skills)
+Ansible n'est pas installé sur le poste : il tourne dans le conteneur `controller`, car il ne fonctionne pas nativement sous Windows. Les commandes de ce document sont celles de Git Bash sous Windows.
 
-L'environnement cloud est un **projet GCP temporaire** fourni par l'un des labs Google Skills
-suivants :
+**Comptes et droits.** Un projet GCP temporaire fourni par le lab Google Skills (identifiants et `project_id` différents à chaque session) et un accès en écriture au dépôt GitHub.
 
-- https://www.skills.google/paths/11/course_templates/443/labs/576066
-- https://www.skills.google/paths/11/course_templates/443/labs/508950
+**Mot de passe Vault.** Il est transmis par le responsable Ansible et n'est jamais écrit dans le dépôt. Il se saisit à chaque lancement (`--ask-vault-pass`).
 
-Contraintes à anticiper, typiques d'un environnement de lab :
+**Contraintes observées dans le lab (session du 1er novembre 2026)**
 
-- **durée limitée** : le projet et tout ce qu'il contient sont supprimés à la fin de la session.
-  Relevez la durée affichée dans le panneau du lab ; votre déploiement complet (Terraform +
-  Ansible) doit tenir **largement** dans ce temps ;
-- **identifiants changeants** : `project_id`, compte et identifiants sont différents à chaque
-  session. Ils sont passés en variables, jamais écrits dans le code ni committés ;
-- **périmètre restreint** : la région, la zone, les types de machine ou les API autorisés peuvent
-  être limités par le lab. Relevez ces contraintes dès la première session et documentez-les ;
-- **poste de contrôle** : Utiliser votre poste local pour utiliser `Terraform` et `gcloud`. 
-- **Consigne : Cloud Shell** : N'utilisez pas Cloud Shell pour développer votre projet car vous risquez de ne pas récupérer votre travail
-  avant la suppression du lab.
+- Durée d'environ 1 heure : le projet et tout son contenu sont supprimés à la fin.
+- Région imposée : `europe-west1` est refusée (erreur 412, contrainte `gcp.resourceLocations`), `us-west1` / `us-west1-b` est acceptée. À vérifier à chaque session.
+- OS Login est activé sur le projet : les VM le désactivent explicitement, sans quoi les clés SSH des métadonnées sont ignorées.
+- Ne pas utiliser Cloud Shell : le travail serait perdu à la fin du lab.
 
-Conséquence directe, et c'est tout l'intérêt de l'IaC : vous allez **reconstruire votre
-environnement de zéro à chaque session**. Si cela demande plus que quelques commandes
-documentées, votre automatisation n'est pas terminée.
+## 4. Déploiement de zéro
 
-## 3. Exigences Terraform & Ansible
+Le même `site.yml` sert dans les deux environnements. Toutes les commandes se lancent depuis la racine du dépôt.
 
-Pour les exigences sur Ansible voir le fichier ANSIBLE.md
-Pour les exigences sur Terraform voir le fichier TERRAFORM.md
-
-## 4. Consignes transverses
-
-- **Idempotence partout** : `terraform plan` après `apply` → `No changes` ; second
-  `ansible-playbook site.yml` → `changed=0`.
-- **Code commenté** : chaque fichier commence par un commentaire qui explique son rôle ; les choix
-  non évidents sont expliqués là où ils sont faits.
-- **Un seul code, deux environnements** : aucune condition du type `when: env == 'local'` dans
-  les rôles pour contourner une différence d'environnement, sauf cas justifié et documenté.
-  Les différences passent par l'inventaire et les `group_vars`.
-- **Rien de sensible dans Git** : state Terraform, `.terraform/`, clés SSH, identifiants GCP, mot
-  de passe Vault → `.gitignore` dès le premier commit.
-
-## 5. Structure de dépôt attendue
-
-La structure exacte est libre, mais elle doit rester proche de celle-ci et être expliquée dans le
-README :
-
-```
-socle-web-automatise/
-├── README.md                     → documentation de transfert (point d'entrée unique)
-├── docs/                         → schémas, décisions techniques, runbooks, slides éventuels
-├── terraform/
-│   ├── versions.tf
-│   ├── providers.tf
-│   ├── variables.tf
-│   ├── network.tf
-│   ├── compute.tf
-│   ├── outputs.tf
-│   └── terraform.tfvars.example  → modèle à copier, le vrai .tfvars n'est pas versionné
-├── local/
-│   ├── docker-compose.yml
-│   ├── node/Dockerfile
-│   └── controller/Dockerfile
-└── ansible/
-    ├── ansible.cfg
-    ├── requirements.yml
-    ├── site.yml
-    ├── playbooks/
-    ├── inventories/
-    │   ├── local/
-    │   │   ├── hosts.yml
-    │   │   └── group_vars/
-    │   └── cloud/
-    │       ├── fleet.gcp.yml
-    │       └── group_vars/
-    ├── group_vars/
-    │   └── all/
-    │       ├── vars.yml
-    │       └── vault.yml         → chiffré
-    └── roles/
-        ├── common/
-        ├── nginx/
-        └── fleetinfo/
+```bash
+git clone https://github.com/Emile943/Projet1-Eval.git
+cd Projet1-Eval
 ```
 
-## 6. Organisation de l'équipe
+### Local (Docker Compose)
 
-Votre équipe est composé de 5 membres.
-Vous pouvez vous organiser comme vous le souhaitez pour réaliser ce projet.
+Version rapide : une commande crée la clé SSH, démarre les conteneurs, demande le mot de passe Vault et déploie l'application.
 
-La documentation est **l'affaire de tous** : chacun documente ce qu'il produit, le tech lead
-assure la cohérence d'ensemble.
+```bash
+bash scripts/local.sh start
+```
 
-Pendant la soutenance, **n'importe quel membre** peut être interrogé sur **n'importe quelle
-partie** du projet. Organisez des points réguliers pour que chacun comprenne le travail des
-autres.
+Versions détaillées, pas à pas :
 
-### Jalons conseillés
+1. Générer la clé SSH locale, ignorée par Git :
 
-1. **Cadrage** : répartition des rôles, dépôt Git initialisé avec sa structure et son
-   `.gitignore`, première session de lab pour relever les contraintes de l'environnement cloud.
-2. **Local fonctionnel** : `docker compose up` + `ansible-playbook site.yml` déploient Fleet Info
-   sur les nœuds locaux.
-3. **Cloud fonctionnel** : `terraform apply` + inventaire dynamique + le **même** `site.yml`
-   déploient Fleet Info sur les VM GCP.
-4. **Robustesse** : rollback démontrable, secrets chiffrés, idempotence vérifiée dans les deux
-   environnements, `ansible-lint` propre.
-5. **Transfert** : documentation finalisée, puis **répétition générale** : un membre de l'équipe
-   redéploie tout de zéro dans une nouvelle session de lab en suivant uniquement le README.
+   ```bash
+   mkdir -p local/ssh
+   ssh-keygen -t ed25519 -N "" -C ansible-local -f local/ssh/id_ed25519
+   ```
 
-## 7. Documentation de transfert de connaissance
+2. Démarrer les trois conteneurs : `cd local && docker compose up -d --build`. Attendu : `node1`, `node2` et `controller` à l'état `Running`.
+3. Tester la connexion : `docker compose exec controller ansible web -m ping --ask-vault-pass`. Attendu : `SUCCESS` et `"ping": "pong"` pour chaque nœud.
+4. Déployer : `docker compose exec controller ansible-playbook site.yml --ask-vault-pass`. Attendu : `failed=0` et `unreachable=0`, puis les pages sur `http://localhost:8081` et `http://localhost:8082`.
+5. Arrêter : `bash scripts/local.sh down` (supprime conteneurs et données).
 
-Rédigez votre documentation pour **un consultant qui reprend le run** : il connaît Terraform,
-Ansible et GCP, mais ne connaît **ni votre projet, ni vos choix, ni vos conventions**.
+### Cloud (projet de lab)
 
-**Critère de réussite :** le consultant doit pouvoir, en suivant votre documentation
-et en posant des questions, redéployer l'ensemble dans un projet GCP vierge et en local,
-puis réaliser les opérations courantes ci-dessous.
+Raccourci pour les étapes 2 à 5 : `bash scripts/cloud.sh setup` puis `bash scripts/cloud.sh up`. Raccourci pour les étapes 6 à 8 : `bash scripts/cloud.sh deploy`, validé de bout en bout sur un lab réel (second passage à `changed=0`).
 
-Le README principal (éventuellement complété par `docs/` ou par des slides) doit couvrir :
+1. S'authentifier : `gcloud auth application-default login`, avec le compte du lab, dans une fenêtre privée. Laisser le terminal ouvert jusqu'à `Credentials saved`.
+2. Préparer les valeurs : `cd terraform && cp terraform.tfvars.example terraform.tfvars`, puis renseigner `project_id`, `ssh_source_ranges` (son IP en `/32`, via `curl -s ifconfig.me`) et `region` / `zone` si le lab les impose.
+3. `terraform init`, puis `terraform plan`. Attendu : `Plan: 6 to add`.
+4. `terraform apply` (répondre `yes`). Attendu : `Apply complete! Resources: 6 added` et les IP des VM.
+5. `terraform plan` à nouveau. Attendu : `No changes. Your infrastructure matches the configuration.`
+6. Préparer le poste de contrôle Ansible : démarrer le conteneur `controller`, y copier les identifiants Google et la clé SSH, et générer `run.gcp.yml` (commandes ci-dessous, à lancer depuis la racine du dépôt).
+7. Vérifier l'inventaire dynamique. Attendu : les VM dans le groupe `web`.
+8. Déployer avec `ansible-playbook`. Attendu : `failed=0` pour chaque VM ; un second passage doit afficher `changed=0`.
 
-1. **Présentation** : objectif du socle, périmètre, ce qui est automatisé et ce qui ne l'est pas.
-2. **Architecture** : schéma des deux environnements, flux réseau, rôle de chaque outil, et la
-   frontière entre Terraform et Ansible.
-3. **Prérequis et accès** : outils et versions, comptes et droits nécessaires, récupération du
-   mot de passe Vault, contraintes de l'environnement de lab.
-4. **Déploiement de zéro** : procédure pas à pas, commandes copiables, résultat attendu à chaque
-   étape, pour l'environnement local **et** pour le cloud.
-5. **Runbooks d'exploitation** — pour chacun : quand l'utiliser, commandes, comment vérifier que
-   l'opération a réussi :
-   - déployer une nouvelle version de l'application ;
-   - revenir manuellement à une version précédente ;
-   - ajouter (ou retirer) un serveur ;
-   - modifier la configuration du serveur web ;
-   - changer le mot de passe de `/status` et le mot de passe Vault ;
-   - vérifier l'état de conformité d'un serveur (`--check --diff`) ;
-   - détruire l'environnement proprement.
-6. **Référence des variables** : où chaque variable est définie, ce qu'elle fait, sa valeur par
-   défaut.
-7. **Décisions techniques** : chaque choix structurant avec sa justification et les alternatives
-   écartées (rôles publics utilisés, image Docker des nœuds, gestion du state, méthode d'accès SSH).
-8. **Où regarder en cas de problème** : journaux (déploiement, nginx), fichiers générés sur les
-   serveurs, commandes de diagnostic, erreurs déjà rencontrées et leur solution.
-9. **Limites connues et dette technique** : ce qui n'est pas terminé, ce qui n'est pas prêt pour
-   la production, ce que vous feriez ensuite.
+```bash
+export MSYS_NO_PATHCONV=1
+PROJECT=$(grep '^project_id' terraform/terraform.tfvars | cut -d'"' -f2)
+DC="docker compose -f local/docker-compose.yml"
+sed "s|{{ lookup('env', 'GCP_PROJECT') }}|$PROJECT|" ansible/inventories/cloud/fleet.gcp.yml > ansible/inventories/cloud/run.gcp.yml
+$DC up -d --build controller
+$DC exec -T controller mkdir -p /root/.config/gcloud /root/.ssh
+$DC cp "$(cygpath -w "$APPDATA/gcloud/application_default_credentials.json")" controller:/root/.config/gcloud/application_default_credentials.json
+$DC cp "$(cygpath -w ~/.ssh/id_ed25519)" controller:/root/.ssh/id_ed25519_cloud
+$DC exec -T controller chmod 600 /root/.ssh/id_ed25519_cloud
+$DC exec -T controller pip install -q google-auth requests
+$DC exec controller ansible-inventory -i inventories/cloud/run.gcp.yml --graph
+$DC exec -e ANSIBLE_HOST_KEY_CHECKING=False controller ansible-playbook -i inventories/cloud/run.gcp.yml site.yml -e ansible_ssh_private_key_file=/root/.ssh/id_ed25519_cloud --ask-vault-pass
+```
 
-## 8. Soutenance et passation
+Ces commandes sont celles de Git Bash sous Windows ; sous Linux ou macOS, remplacer `$APPDATA/gcloud` par `~/.config/gcloud` et supprimer `cygpath -w`. Ne pas laisser `export MSYS_NO_PATHCONV=1` actif dans un terminal où l'on utilise ensuite `gcloud` : il casse ses chemins (`unset MSYS_NO_PATHCONV` ou nouveau terminal).
 
-**Format :** 30-45 minutes par équipe — environ 10-15 minutes de présentation, 15 minutes de
-démonstration, 10 à 15 minutes de questions.
+Le fichier `run.gcp.yml` est une copie de l'inventaire avec le vrai identifiant du projet : le plugin Google n'évalue pas lui-même la variable d'environnement, et l'identifiant ne doit pas être dans un fichier versionné. Il est ignoré par Git et à régénérer à chaque lab.
 
-La présentation se fait comme une **réunion de passation** au consultant qui reprend le run :
-pas de cours sur Terraform ou Ansible, mais *votre* socle, *vos* choix et *comment l'exploiter*.
+Pour détruire : `bash scripts/cloud.sh down`. À chaque nouveau lab, supprimer d'abord l'ancien state (`rm -f terraform/terraform.tfstate terraform/terraform.tfstate.backup`), qui décrit un projet disparu.
 
-**Scénario de démonstration imposé** (sur une session de lab neuve, environnement cloud préparé à
-l'avance) :
+## 5. Runbooks d'exploitation
 
-1. `terraform apply` puis `terraform plan` → `No changes`.
-2. `ansible-inventory --graph` → les VM apparaissent dans les bons groupes.
-3. `ansible-playbook site.yml` → la page Fleet Info s'affiche sur chaque VM, avec des
-   informations différentes d'une VM à l'autre.
-4. Second `ansible-playbook site.yml` → `changed=0`.
-5. Connexion SSH sur une VM : l'examinateur ouvre un fichier généré par un template et vérifie
-   l'en-tête.
-6. Déploiement d'une nouvelle version → la page affiche la nouvelle version.
-7. Déploiement volontairement en échec → le rollback se déclenche, le site reste en ligne en
-   version N-1, l'échec est tracé dans le journal de déploiement.
-8. Accès à `/status` : refusé sans authentification, accepté avec.
-9. Démonstration rapide de l'environnement local : `docker compose up`, même `site.yml`, même
-   résultat.
-10. `terraform destroy`.
+Sept opérations courantes. En local, les commandes Ansible se lancent depuis `local/` avec le préfixe `docker compose exec controller`.
 
-Si l'environnement cloud n'est pas disponible la démonstration se fera sur l'environnement local.
-L'environnoment local s'appuie sur Docker Desktop + Docker Compose.
+| Opération | Quand | Commandes | Vérification |
+| --- | --- | --- | --- |
+| Déployer une nouvelle version | Livraison d'une release | Changer `fleetinfo_version` dans `ansible/group_vars/all/vars.yml`, ou ajouter `-e fleetinfo_version=1.1.0` ; puis `bash scripts/cloud.sh deploy` (cloud) ou `docker compose exec controller ansible-playbook site.yml --ask-vault-pass` (local) | La page et `/health` affichent la nouvelle version |
+| Tester le retour arrière | Démonstration, ou valider le mécanisme | Ajouter `-e fleetinfo_simulate_failure=true` à la commande de déploiement | Le retour à la version précédente se déclenche, le site reste en ligne, la tentative est tracée dans `/var/log/fleetinfo/deploy.log` |
+| Retour arrière manuel | Release défectueuse déjà active | Sur le serveur : `sudo ln -sfn /opt/fleetinfo/releases/<ancienne> /opt/fleetinfo/current` | `/health` renvoie l'ancienne version |
+| Ajouter ou retirer un serveur | Changement de capacité | Cloud : modifier `vm_count` dans `terraform.tfvars`, `terraform apply`, relancer le déploiement. Local : ajouter un service dans `docker-compose.yml` et l'hôte dans `inventories/local/hosts.yml` | `ansible-inventory --graph` liste la machine dans `web` |
+| Modifier la configuration nginx | Changement de configuration | Modifier le modèle du rôle `nginx`, puis relancer le déploiement | `nginx -t` valide, la page reste servie |
+| Changer les mots de passe | Rotation | `/status` : `ansible-vault edit group_vars/all/vault.yml`. Mot de passe Vault : `ansible-vault rekey group_vars/all/vault.yml` | `/status` refuse l'ancien mot de passe |
+| Vérifier la conformité | Audit sans modification | `bash scripts/cloud.sh deploy --check --diff` (cloud) ou `bash scripts/local.sh check` (local) | `changed=0` si le serveur est conforme |
+| Détruire proprement | Fin de session | Cloud : `bash scripts/cloud.sh down`. Local : `bash scripts/local.sh down` | `Destroy complete! Resources: 6 destroyed` |
 
-L'examinateur peut aussi demander à un membre de l'équipe, choisi au hasard, de dérouler un
-runbook de la documentation en direct.
+## 6. Référence des variables
 
-Tous les membres de l'équipe doivent participer à la soutenance.
+Toutes les valeurs propres à une session de lab se renseignent dans `terraform/terraform.tfvars` (copie de `terraform.tfvars.example`, ignorée par Git). Aucune variable n'est sensible : la clé SSH est publique, seul son chemin est fourni.
 
-## 9. Évaluation
+### Terraform (`terraform/variables.tf`)
 
-Critères
+| Nom | Description | Type | Défaut |
+| --- | --- | --- | --- |
+| `project_id` | ID du projet GCP du lab | `string` | **obligatoire** |
+| `ssh_source_ranges` | IP autorisées en SSH (jamais `0.0.0.0/0`) | `list(string)` | **obligatoire** |
+| `region` | Région GCP | `string` | `europe-west1` |
+| `zone` | Zone GCP | `string` | `europe-west1-b` |
+| `vm_count` | Nombre de VM | `number` | `2` |
+| `machine_type` | Type de machine | `string` | `e2-small` |
+| `network_name` | Nom du VPC | `string` | `fleet-vpc` |
+| `subnet_name` | Nom du sous-réseau | `string` | `fleet-subnet` |
+| `subnet_cidr` | Plage d'IP du sous-réseau | `string` | `10.10.0.0/24` |
+| `network_tag` | Tag réseau commun aux VM | `string` | `fleet-web` |
+| `vm_name_prefix` | Préfixe du nom des VM | `string` | `fleet-web` |
+| `labels` | Labels des VM | `map(string)` | `env=cloud`, `role=web`, `team=plateforme` |
+| `ssh_user` | Utilisateur Linux créé sur les VM | `string` | `ansible` |
+| `ssh_public_key_path` | Chemin de la clé SSH publique | `string` | `~/.ssh/id_ed25519.pub` |
 
-- Infrastructure Terraform (réseau, firewall, VM, labels, variables, outputs, idempotence) 
-- Environnement local Docker Compose (nœuds gérés comme des VM, controller, parité avec le cloud) 
-- Playbooks (structure, lisibilité, commentaires, FQCN, tags, idempotence vérifiée, `ansible-lint`) 
-- Rôles (découpage, idempotence, README, justification des rôles publics) 
-- Variables et secrets (placement, précédence, documentation, Ansible Vault, `no_log`) 
-- Templates (génération dynamique depuis les facts, en-tête identifiable, adaptation à l'environnement) 
-- Handlers (reload vs restart, validation de la configuration) 
-- Blocks et rollback (block/rescue/always, retour arrière démontré, journal de déploiement) 
-- Collection et inventaire dynamique `google.cloud.gcp_compute` 
-- Documentation de transfert de connaissance (complétude, exactitude, runbooks, décisions) 
-- Soutenance et démonstration (clarté, maîtrise individuelle, respect du scénario de passation) 
+Les valeurs par défaut de `region` et `zone` sont refusées par le lab observé : les renseigner dans `terraform.tfvars` (`us-west1`, `us-west1-b`).
 
-## 10. Définition de « terminé »
+**Fournisseurs.** Terraform `>= 1.5.0` ; `hashicorp/google` en `~> 6.0`, déclarés uniquement dans `terraform/versions.tf`.
 
-Avant la soutenance, vérifiez que vous pouvez cocher chaque ligne :
+### Sorties Terraform (`terraform output`)
 
-- [ ] Une session de lab neuve + le README suffisent à tout redéployer, sans aide orale.
-- [ ] `terraform plan` après `apply` → `No changes`.
-- [ ] Second `ansible-playbook site.yml` → `changed=0`, en local **et** sur le cloud.
-- [ ] Le même `site.yml` et les mêmes rôles servent dans les deux environnements.
-- [ ] Ajouter une VM côté Terraform ne demande aucune modification du code Ansible.
-- [ ] Un déploiement en échec revient automatiquement à la version précédente, site toujours en
-      ligne.
-- [ ] Les fichiers générés sur les serveurs sont identifiables comme gérés par Ansible.
-- [ ] Aucun secret en clair dans le dépôt ni dans son historique.
-- [ ] `terraform fmt -check`, `terraform validate` et `ansible-lint` passent.
-- [ ] Chaque rôle a son README, chaque variable est documentée, chaque rôle public est justifié.
-- [ ] Chaque membre de l'équipe sait expliquer et exécuter chaque runbook.
+| Sortie | Contenu |
+| --- | --- |
+| `network_name` | Nom du VPC |
+| `subnet_name` | Nom du sous-réseau |
+| `vm_names` | Noms des VM |
+| `vm_public_ips` | IP publique de chaque VM (nom vers IP) |
+
+### Ansible et environnement local
+
+| Variable | Où | Rôle |
+| --- | --- | --- |
+| `fleetinfo_version` | `ansible/group_vars/all/vars.yml` | Version de l'application à déployer |
+| `fleetinfo_simulate_failure` | `roles/fleetinfo/defaults/main.yml` (défaut `false`) | Provoque un échec de déploiement pour tester le retour arrière |
+| `common_timezone` | `roles/common/defaults/main.yml` | Fuseau horaire (`Etc/UTC`) |
+| `ansible_user`, `ansible_ssh_private_key_file` | `inventories/<env>/group_vars/all.yml` | Connexion SSH, propre à chaque environnement |
+| `ANSIBLE_CONFIG` | `local/docker-compose.yml` | Chemin explicite de `ansible.cfg` dans le contrôleur |
+| `projects` (dans `run.gcp.yml`) | Fichier non versionné, généré | Identifiant du projet du lab, écrit par la commande `sed` dans la copie de l'inventaire dynamique |
+
+Les variables de `vars.yml` et `vault.yml` sont à compléter par le responsable Ansible.
+
+## 7. Décisions techniques
+
+Chaque choix suit une contrainte du sujet ou du lab ; la colonne de droite dit ce qui a été écarté.
+
+| Décision | Justification | Alternative écartée |
+| --- | --- | --- |
+| State Terraform local | Le projet du lab est éphémère | Backend GCS versionné avec verrouillage (recommandé en entreprise) |
+| Clé SSH en métadonnées + `enable-oslogin = FALSE` | Indépendant des droits IAM du lab ; OS Login imposé par le projet ignorait les clés | OS Login |
+| SSH limité à l'IP de l'opérateur (`/32`) | Le port 22 ouvert à Internet est scanné en permanence ; seul le poste Ansible s'y connecte | `0.0.0.0/0` (refusé par une validation Terraform) |
+| VPC dédié en mode custom | Exigence du sujet, pas de sous-réseaux automatiques | Réseau `default` |
+| IP publiques éphémères + inventaire dynamique | Aucune IP statique à maintenir, les VM sont retrouvées par leurs labels | IP statiques |
+| Deux modules (`network`, `compute`) | Une responsabilité par module ; passer de 2 à 3 VM ne change qu'une variable | Ressources dans le `main.tf` racine |
+| Nœuds Docker `debian:12` avec systemd, `privileged` | Même OS que les VM GCP ; systemd nécessaire aux modules `service` et aux handlers | Conteneurs sans systemd |
+| Contrôleur : Python 3.12 + `pip install ansible` | Ansible ne tourne pas nativement sous Windows | WSL (accepté par le sujet) |
+| Clés locales générées dans `local/ssh/` | Jamais committées (`.gitignore`) | Clés dans l'image |
+| `ANSIBLE_CONFIG` explicite | Sous Docker Desktop, le dossier monté est modifiable par tous et Ansible ignore alors son `ansible.cfg` | `chmod` (sans effet sous Windows) |
+| Valeurs de lab dans `terraform.tfvars` non versionné | Aucun identifiant de projet dans Git | Valeurs par défaut en dur |
+| Inventaire cloud : copie générée `run.gcp.yml` | Le plugin ne lit pas la variable d'environnement dans `projects` ; le sujet interdit l'identifiant dans un fichier versionné mais autorise un fichier non versionné généré | Identifiant en dur dans `fleet.gcp.yml` |
+
+Les rôles Ansible publics éventuels et leur justification sont à ajouter par le responsable Ansible.
+
+## 8. Où regarder en cas de problème
+
+**Diagnostic.** Journal de déploiement : `/var/log/fleetinfo/deploy.log`. Journaux nginx : `/var/log/nginx/`. Conteneurs : `docker compose -f local/docker-compose.yml ps` et `docker compose -f local/docker-compose.yml logs <service>`. Connexion : `ansible web -m ping --ask-vault-pass`. Infrastructure : `terraform -chdir=terraform output`.
+
+| Symptôme | Cause | Solution |
+| --- | --- | --- |
+| `terraform apply` : erreur 412 `gcp.resourceLocations` | Région refusée par le lab | Renseigner `region` et `zone` autorisées dans `terraform.tfvars` (ex. `us-west1`, `us-west1-b`) |
+| `terraform apply` : `Invalid value for field 'zone'` | Caractère parasite (une apostrophe) dans `terraform.tfvars` | Remettre `zone = "us-west1-b"`, puis relancer `apply` ; les VM sont recréées |
+| `terraform plan` : `could not find default credentials` | Pas de connexion Google | `gcloud auth application-default login` |
+| `localhost:8085` : `ERR_CONNECTION_REFUSED` pendant la connexion gcloud | La commande ne tourne plus, ou un VPN de navigateur interfère | Laisser la commande ouverte, désactiver le VPN, relancer |
+| `gcloud` : `can't open file 'C:/c/Users/...'` | `MSYS_NO_PATHCONV=1` actif dans le terminal | `unset MSYS_NO_PATHCONV` ou ouvrir un nouveau terminal |
+| `invalid_grant: Bad Request` dans l'inventaire | Lab expiré : le compte et le projet n'existent plus | Démarrer un nouveau lab, supprimer l'ancien state, se reconnecter avec le nouveau compte |
+| SSH : `Permission denied (publickey)` sur une VM | OS Login imposé par le projet | `enable-oslogin = FALSE` (déjà dans le module `compute`) ; attendre environ une minute après le démarrage |
+| SSH : `REMOTE HOST IDENTIFICATION HAS CHANGED` | VM recréée : nouvelle empreinte pour la même adresse IP | `ssh-keygen -R <IP>`, ou `-o UserKnownHostsFile=/dev/null` sur un lab jetable |
+| Contrôleur `Exited (255)`, `exec format error` | Script d'entrée non exécutable depuis un montage Windows | Entrypoint lancé par `sh` (déjà en place) ; fins de ligne en LF |
+| Ansible : `No inventory was parsed` | `ansible.cfg` ignoré (dossier world-writable) | `ANSIBLE_CONFIG` dans `docker-compose.yml` |
+| Ansible : `Permission denied on resource project {{ lookup(...) }}` | Le plugin `gcp_compute` n'évalue pas la variable d'environnement dans `projects` | Utiliser `run.gcp.yml`, généré avec l'identifiant réel (commande `sed` de la section 4) |
+| `Attempting to decrypt but no vault secrets found` | Mot de passe Vault non fourni | Ajouter `--ask-vault-pass` |
+| `community.general.yaml callback has been removed` | Callback supprimé de la collection | `stdout_callback = ansible.builtin.default` et `callback_result_format = yaml` |
+| Fuseau horaire : `still not desired state` | Debian normalise `UTC` en `Etc/UTC` | `common_timezone: "Etc/UTC"` |
+| `.htpasswd` : `Failed to import ... passlib` | Bibliothèque absente de la cible | Installer `python3-passlib` avant la tâche |
+| `set_fact` : `No key/value pairs provided` | `default(omit)` au premier déploiement | `default('')` et condition sur `previous_target` non vide |
+| Déploiement : `/health` répond 404, retour arrière déclenché sur des VM neuves | nginx n'avait pas rechargé sa configuration avant le contrôle (le handler s'exécute en fin de play) | Tâche `meta: flush_handlers` au début du rôle `fleetinfo` (déjà en place) |
+| Second passage : `changed=2` | Journal `deploy.log` et date de déploiement recalculés à chaque passage | `changed_when: false` sur le journal ; date de déploiement figée par release (fichier `deployed_at`) |
+| Git : `refusing to merge unrelated histories` | Branches sans ancêtre commun | Recréer la branche à partir de `main`, ou `--allow-unrelated-histories` sur une branche de test |
+
+## 9. Limites connues et dette technique
+
+Le socle fonctionne en local de bout en bout et sur GCP : infrastructure, inventaire dynamique et déploiement de l'application sur deux VM neuves ont été validés sur un lab réel, avec un second passage à `changed=0`.
+
+**À terminer avant la soutenance**
+
+- `terraform fmt -check`, `terraform validate` et `ansible-lint` ne tournent pas encore dans un contrôle automatique.
+- Les corrections des rôles Ansible (rechargement de nginx avant le contrôle `/health`, journal `deploy.log` en `changed_when: false`, date de déploiement figée par release) sont sur la branche `integration`, pas encore reprises sur la branche `ansible`, dont l'historique est sans lien avec `main`.
+
+**Hors production**
+
+- State Terraform local, sans verrouillage ni sauvegarde.
+- Nœuds Docker en `privileged` et `StrictModes no` : acceptable en développement local uniquement.
+- HTTP sans TLS ; `/status` protégé par mot de passe basique.
+- SSH ouvert à une seule IP : si elle change, il faut mettre à jour `ssh_source_ranges` et relancer `terraform apply`.
+- Variable `ansible_date_time` dépréciée, à remplacer par `ansible_facts['date_time']`.
+
+**Suites envisagées :** backend distant GCS pour le state, TLS sur nginx, contrôles automatiques (`terraform validate`, `ansible-lint`) à chaque Pull Request.
